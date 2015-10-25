@@ -1,21 +1,173 @@
 ---
-title: "Practical Machine Learning"
+title: "Practical Machine Learning Project"
 output: html_document
 ---
+
+###**Synposis**
+
+Given training data and test data available from the following source:  
+
+*Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.*
 
 The goal of this project is to predict the manner in which participants did the exercise. This is the "classe" variable in the training set. You may use any of the other variables to predict with. 
 You should create a report describing:  
 - How you built your model,  
-- how you used cross validation,  
-- what you think the expected out of sample error is,  
-- why you made the choices you did.  
+- How you used cross validation,  
+- What you think the expected out of sample error is,  
+- Why you made the choices you did.  
 - You will also use your prediction model to predict 20 different test cases.  
 
-Lets start by reading training data. The training data file is stored in Data folder.
+This study will apply the following stages of **"Components of predictor"** from the course:  
+- Question  
+- Input Data  
+- Features  
+- Algorithm  
+- Parameters  
+- Evaluation  
+
+###**Question**
+
+6 participants were asked to perform barbell lifts correctly and incorrectly in 5 different ways. Using data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants, we want to predict   
+**How well (Class A-E) the activity was performed during the exercise ?** 
+
+###**Input Data** 
+Lets download and read training and test data
 
 ```{r}
-training <- read.csv("./data/pml-training.csv")
-str(training)
+# Download data.
+folder <- "./data"
+trainingFilePath <- paste(folder, "pml-training.csv", sep="/")
+testingFilePath <- paste(folder, "pml-testing.csv", sep="/")
+  
+if (!file.exists(folder)) {
+  dir.create(folder)
+  trainingUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+  download.file(trainingUrl, destfile = trainingFilePath)
+
+  testingUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+  download.file(testingUrl, destfile = testingFilePath)
+}
+
+# Read data treating NA, empty values and #DIV/0! as NA.
+training <- read.csv(trainingFilePath, na.strings=c("NA","#DIV/0!", ""))
+testing <- read.csv(testingFilePath, na.strings=c("NA","#DIV/0!", ""))
+
+```
+###**Features**
+Lets start by eliminitating columns with NA 
+
+```{r}
+trainingColumns <- names(training)
+columnsWithNa <- c()
+
+for(col in 1:length(trainingColumns)){ 
+  if (sum(is.na(training[col])) > 0){
+    columnsWithNa <- c(columnsWithNa, col)
+  }
+}
+training <- training[, -columnsWithNa]
+
 ```
 
+Then remove the first 7 columns since they are useless for prediction:   
+"x", "user_name", "raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp", "new_window", "num_window"
+
+```{r}
+training <- training[, -c(1:7)]
+```
+
+Then lets remove zero covariates
+```{r}
+library(caret)
+nzv <- nearZeroVar(training, saveMetrics=TRUE)
+training <- training[,nzv$nzv==FALSE]
+```
+
+Finally we will keep common columns between training and testing data sets
+```{r}
+commonNames <- colnames(training[, -53]) #Exclude classe column
+testing <- testing[, commonNames]
+```
+
+###**Algorithm**
+To choose the appropriate  model we will apply the **cross validation** approach described in the course:  
+
+* Split training set into training/test sets  
+* Build a model on the training set  
+* Evaluate the model on the test set 
+
+```{r}
+#Given the medium sample size lets split thee training set into training (60%) and test(40%) set
+set.seed(32145)
+inTrain <- createDataPartition(training$classe, p = 0.6, list = FALSE)
+training1 <- training[inTrain,]
+testing1 <- training[-inTrain,]
+
+```
+
+###**Evaluation**  
+####**Classification Tree**
+
+Lets train the model using rpart method
+```{r}
+library(rpart)
+library(rpart.plot)
+library(rattle)
+
+#method = "class" since classe is a factor
+modelFit <- rpart(classe ~ ., data = training1, method ="class")
+# Plot the final model
+fancyRpartPlot(modelFit)
+
+# Evaluate the  model on the test set:
+# predict classe values for testing1 data set
+# type = "class" since classe is a factor
+predictions <- predict(modelFit, newdata = testing1, type="class")
+# then compute the confusion matrix
+conf <- confusionMatrix(predictions, testing1$classe)
+print(conf, digits = 4)
+```
+Since the variable we are predicting is a categorical outcome (classe is a factor with A-E values) we will focus on Accuracy and Kappa metrics.
+
+Accuracy: `r round(conf$overal[1], 4)` and  Kappa: `r round(conf$overal[2], 4)` needs to be enhanced.
+
+####**Random Forest**  
+Lets train the model using random forest
+```{r, cache=TRUE}
+library(randomForest)
+
+modelFit1 <- randomForest(classe ~ ., data = training1)
+# type = "class" since classe is a factor
+predictions1 <- predict(modelFit1, newdata = testing1, type="class")
+conf1 <- confusionMatrix(predictions1, testing1$classe)
+print(conf1, digits = 4)
+
+```
+Accuracy: `r round(conf1$overal[1], 4)` and Kappa: `r round(conf1$overal[2], 4)` are much better than Classification Tree as expected
+
+What if we include 10-fold cross validation while training the model?
+```{r, cache=TRUE}
+#define trainning control 
+kfCrossValidation <- trainControl(method="cv", number=10)
+#train the model
+modelFit2 <- train(classe ~ ., data = training1, method = "rf", trControl=kfCrossValidation)
+#make predictions
+predictions2 <- predict(modelFit2, newdata = testing1)
+#summarize results
+conf2 <- confusionMatrix(predictions2, testing1$classe)
+print(conf2, digits = 4)
+
+
+```
+Accuracy: `r round(conf2$overal[1], 4)` and Kappa: `r round(conf2$overal[2], 4)` are equivalent to modelFit1 with default random forest model
+
+
+###**Predict on Test Data**  
+####**Out of sample error**  
+Random Forests gave much better accuracy then classification tree on testing1 data set. by using the modelFit2 (randomForest with 10-fold cross validation) the expected **out of sample error is `r round(100*(1-conf2$overal[1]), 2)`% = (100 - `r round(100*conf2$overal[1], 2)`)**
+
+```{r}
+testPredictions <- predict(modelFit2, newdata = testing)
+print(testPredictions)
+```
 
